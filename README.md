@@ -25,9 +25,9 @@ Demo tokens (local only): `acme-planner-demo`, `acme-viewer-demo`, `acme-admin-d
 2. Inject a what-if: Shanghai loses 70% of its capacity for 21 days. A queue model gives each shipment a delay by the day it reaches the port (up to 13.1 days, and the queue takes two months to drain).
 3. Exposure: 5,122 shipments and 1,224 components delayed (207 with no second source); following the BOM down, 36 finished products lose sales; expected lost revenue $2.58M.
 4. Each plant is simulated day by day for 12 weeks. First stock-outs appear around day 33 to 40. One shipment's arrival forecast (promised 20 Nov, predicted 5 Dec) and its supplier's risk are shown.
-5. A job runs 1,000 futures with uncertain depth, length and transit times: median lost revenue $3.2M, one in ten above $35M.
+5. A job runs 1,000 futures with uncertain depth, length and transit times: median lost revenue $3.3M, one in ten above $36M.
 6. A mixed-integer model (78,437 variables) picks 46 shipments to fly, 5 second-source buys and 17 warehouse transfers.
-7. Three plans judged by the same simulator: do nothing costs $1.39M, flying the most delayed shipments $5.39M, the optimized plan $0.21M.
+7. Three plans judged by the same simulator: do nothing costs $1.39M, flying the most delayed shipments $5.39M, the optimized plan $0.22M.
 
 ## Architecture
 
@@ -94,8 +94,8 @@ Contract: [`docs/openapi.json`](docs/openapi.json).
 
 ## The hardest tradeoff
 
-The optimizer plans for the expected delay, and the expected case is not what happens. In the demo its plan costs $0.21M against $5.39M
-for flying everything, but in the worst tenth of the Monte Carlo futures it still loses about $22M of revenue where the expensive plan
+The optimizer plans for the expected delay, and the expected case is not what happens. In the demo its plan costs $0.22M against $5.39M
+for flying everything, but in the worst tenth of the Monte Carlo futures it still loses about $21M of revenue where the expensive plan
 loses about $8M. A cheap plan carries less insurance. Solving over scenarios (a stochastic program) would price that tradeoff properly
 and was not built: it multiplies the model by the number of scenarios. Instead the plan is scored on the simulated futures and the
 tail is shown next to the saving, so a planner sees both.
