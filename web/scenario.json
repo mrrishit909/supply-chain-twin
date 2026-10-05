@@ -1,0 +1,114 @@
+{
+ "service": "supply-chain-twin",
+ "run": "demo-1",
+ "tokens": {
+  "planner": "acme-planner-demo",
+  "admin": "acme-admin-demo"
+ },
+ "steps": [
+  {
+   "title": "Open the live network map",
+   "say": "Ports, plants and warehouses, with a sample of the inbound shipments at sea right now. Every dot is a purchase order on its way to a plant.",
+   "calls": [
+    {
+     "key": "map",
+     "as": "planner",
+     "method": "GET",
+     "path": "/v1/map/state"
+    }
+   ]
+  },
+  {
+   "title": "Inject a 21-day port capacity reduction",
+   "say": "Shanghai loses 70% of its capacity for three weeks. A queue model turns that into a delay for each shipment, depending on the day it reaches the port.",
+   "calls": [
+    {
+     "key": "scn",
+     "as": "planner",
+     "method": "POST",
+     "path": "/v1/scenarios",
+     "body": {
+      "name": "Shanghai capacity -70% for 21 days",
+      "event_type": "port_capacity_reduction",
+      "facility": "Shanghai",
+      "severity": 0.7,
+      "duration_days": 21
+     }
+    }
+   ]
+  },
+  {
+   "title": "Affected shipments and finished products",
+   "say": "Which orders are delayed, which components they carry, and which finished products contain those components once the bill of materials is followed all the way down.",
+   "calls": [
+    {
+     "key": "exp",
+     "as": "planner",
+     "method": "GET",
+     "path": "/v1/exposure?event={{scn.id}}"
+    }
+   ]
+  },
+  {
+   "title": "Forecast inventory depletion by facility",
+   "say": "Each plant is simulated day by day for 12 weeks: stock on hand, delayed receipts, daily use. The chart shows days of cover for the components that run out first. Then one shipment's arrival forecast and its supplier's risk.",
+   "calls": [
+    {
+     "key": "eta",
+     "as": "planner",
+     "method": "GET",
+     "path": "/v1/shipments/{{exp.shipments.top.0.id}}/eta?scenario={{scn.id}}"
+    },
+    {
+     "key": "sup",
+     "as": "planner",
+     "method": "GET",
+     "path": "/v1/suppliers/{{exp.shipments.top.0.supplier_id}}/risk"
+    }
+   ]
+  },
+  {
+   "title": "Run 1,000 Monte Carlo futures",
+   "say": "The cut may be deeper or longer than assumed, and every shipment's transit time is noisy. A background job simulates a thousand futures, and the same thousand without the disruption for comparison.",
+   "calls": [
+    {
+     "key": "mc",
+     "as": "planner",
+     "method": "POST",
+     "path": "/v1/scenarios/{{scn.id}}:run",
+     "body": {
+      "runs": 1000
+     }
+    }
+   ]
+  },
+  {
+   "title": "Optimize the recovery",
+   "say": "A mixed-integer model chooses which delayed shipments to fly, what to buy from a second source that does not use the port, and what to pull from warehouse reserve.",
+   "calls": [
+    {
+     "key": "plan",
+     "as": "planner",
+     "method": "POST",
+     "path": "/v1/recovery-plans",
+     "body": {
+      "scenario_id": "{{scn.id}}",
+      "runs": 500
+     }
+    }
+   ]
+  },
+  {
+   "title": "Compare baseline and recovery plan",
+   "say": "Three plans judged by the same daily simulator, not by the optimizer's own arithmetic: do nothing, fly the most delayed shipments, and the optimized plan.",
+   "calls": [
+    {
+     "key": "audit",
+     "as": "admin",
+     "method": "GET",
+     "path": "/v1/audit?limit=8"
+    }
+   ]
+  }
+ ]
+}

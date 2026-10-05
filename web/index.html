@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supply-Chain Disruption Digital Twin</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="kit.css">
+<style>
+#map { height:430px; border-radius:10px; border:1px solid var(--line); background:#0e1116; }
+.leaflet-tile { filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.5); }
+.leaflet-container { background:#0e1116; font:12px Geist,Inter,sans-serif; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Supply-Chain Disruption Digital Twin</h1>
+  <span class="sub">An invented manufacturer: 500 suppliers, 50 facilities, 5,000 parts. What does a port slowdown cost, and what is the cheapest way out?</span>
+  <span class="mode">…</span>
+  <button class="primary" id="runall">Run all steps</button>
+</header>
+<main>
+  <nav class="steps"></nav>
+  <div>
+    <div id="steps"></div>
+    <section class="step" id="roi"><div class="head"><div class="grow"><h2>What is it worth?</h2>
+      <p>Per-event figures come from the comparison above (run step 7 first). Events per year is an assumption: change it.</p></div></div>
+      <div class="out"><div class="card roi" id="roibox"><span class="mute">Run step 7 to load the figures.</span></div></div></section>
+  </div>
+</main>
+<footer>Port and city locations are real; every company, part, order and dollar is synthetic. Map tiles © OpenStreetMap contributors.</footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="kit.js"></script>
+<script>
+const M = x => fmt.usd(x >= 1e6 ? x / 1e6 : x >= 1e3 ? x / 1e3 : x, x >= 1e6 ? 2 : x >= 1e3 ? 0 : 0) + (x >= 1e6 ? 'M' : x >= 1e3 ? 'k' : '');
+const hist = h => { const max = Math.max(...h.disrupted, ...h.undisturbed, 1), w = 680, hh = 200, n = h.disrupted.length, bw = (w - 60) / n;
+  return `<svg viewBox="0 0 ${w} ${hh}" width="100%">${h.disrupted.map((v, i) => `<rect x="${50 + i * bw}" y="${hh - 24 - (hh - 40) * v / max}" width="${bw - 2}" height="${(hh - 40) * v / max}" fill="#ef6a6a" opacity=".85"/>`).join('')}
+    ${[0, 6, 12, 18, 24].map(i => `<text x="${50 + i * bw}" y="${hh - 8}" text-anchor="middle">${M(h.edges[i])}</text>`).join('')}<text x="6" y="14">futures (of ${h.disrupted.reduce((a, b) => a + b, 0)} shown)</text></svg>
+    <div class="legend"><span><i style="background:#ef6a6a"></i>lost revenue with the port cut (top 2% of futures lie beyond the right edge)</span></div>`; };
+const planName = { do_nothing: 'Do nothing', expedite_most_delayed: 'Fly the most delayed first', optimized: 'Optimized plan' };
+let map, layers = {};
+const R = {
+  map: m => kpis([{ label: 'Suppliers', value: fmt.n(m.kpis.suppliers) }, { label: 'Facilities', value: m.kpis.facilities }, { label: 'Parts', value: fmt.n(m.kpis.parts), sub: m.kpis.finished_products + ' finished products' },
+      { label: 'Inbound shipments', value: fmt.n(m.kpis.in_transit + m.kpis.planned), sub: fmt.n(m.kpis.in_transit) + ' at sea or on the road' }, { label: 'Inbound value', value: M(m.kpis.inbound_value) },
+      { label: 'Single-sourced components', value: fmt.n(m.kpis.single_sourced) }, { label: 'Weekly revenue', value: M(m.kpis.weekly_revenue) }])
+    + `<div id="map"></div><div class="legend"><span><i style="background:#7aa2ff"></i>port</span><span><i style="background:#3fb97a"></i>plant</span><span><i style="background:#6b6b78"></i>warehouse</span><span><i style="background:#e0a63c"></i>shipment in transit (sample of ${m.in_transit_sample.length})</span><span><i style="background:#ef6a6a"></i>disrupted</span></div>`,
+  scn: s => card('Scenario created', kpis([{ label: 'Port', value: esc(s.assumptions.facility) }, { label: 'Capacity lost', value: fmt.pct(s.assumptions.severity) }, { label: 'Duration', value: s.assumptions.duration_days + ' days' },
+      { label: 'Normal utilisation', value: fmt.pct(s.assumptions.port_utilization), sub: 'queue model input' }]) + `<div class="small mute">The port and its lanes are now marked on the map above. Engine ${esc(s.assumptions.engine)}.</div>`),
+  exp: e => kpis([{ label: 'Shipments delayed', value: fmt.n(e.shipments.affected), sub: M(e.shipments.value) + ' of goods' }, { label: 'Delay', value: e.shipments.mean_delay_days + ' d', sub: 'mean · max ' + e.shipments.max_delay_days + ' d' },
+      { label: 'Components delayed', value: fmt.n(e.components.delayed), sub: e.components.single_sourced + ' single-sourced' },
+      { label: 'Products containing them', value: e.finished_products.dependent, sub: e.finished_products.losing_sales + ' lose sales' },
+      { label: 'Expected lost revenue', value: `<span style="color:var(--bad)">${M(e.expected.lost_revenue)}</span>`, sub: 'margin ' + M(e.expected.lost_margin) }, { label: 'Service level', value: fmt.pct(e.expected.service_level, 2) }])
+    + `<div class="grid2">${card('Delay by the day a shipment reaches the port', lineChart([{ name: 'days waiting in the queue', points: e.shipments.delay_by_departure_day, area: 1, color: '#ef6a6a' }],
+        { h: 200, xfmt: v => 'day ' + Math.round(v), marks: [{ x: e.assumptions.duration_days, label: 'capacity restored' }] }))}
+      ${card('Finished products most at risk', table([{ k: 'sku', label: 'Product' }, { k: 'plant', label: 'Plant' }, { k: 'delayed_components', label: 'Delayed parts', num: 1 },
+        { k: 'revenue_at_risk', label: 'Revenue at risk', num: 1, f: M }], e.finished_products.top.slice(0, 6)))}</div>`
+    + card('Largest delayed shipments', table([{ k: 'supplier', label: 'Supplier' }, { k: 'carrier', label: 'Carrier' }, { k: 'departs_in_days', label: 'Departs in', num: 1, f: v => v + ' d' },
+        { k: 'delay_days', label: 'Delay', num: 1, f: v => v + ' d' }, { k: 'value', label: 'Value', num: 1, f: M }], e.shipments.top.slice(0, 6))),
+  _step3: Object.assign(r => { const e = r.exp, f = e.facilities[0];
+    return card('Inventory depletion by plant (expected case, 84 days)', table([{ k: 'plant', label: 'Plant' }, { k: 'delayed_shipments', label: 'Delayed shipments', num: 1, f: v => fmt.n(v) },
+        { k: 'first_stockout_day', label: 'First stock-out', num: 1, f: v => v == null ? '–' : 'day ' + v }, { k: 'components_short', label: 'Components short', num: 1 }, { k: 'lost_revenue', label: 'Lost revenue', num: 1, f: M }], e.facilities))
+      + card(`${f.plant}: days of cover for the three components that run out longest`, lineChart(f.depletion.flatMap((d, i) => [
+          { name: d.sku + (d.single_sourced ? ' (single-sourced)' : ''), points: d.cover_days.map((v, t) => [t, v]), color: PALETTE[i] },
+          { points: d.cover_days_undisturbed.map((v, t) => [t, v]), color: PALETTE[i], dash: 1, width: 1 }]), { h: 240, xfmt: v => 'day ' + Math.round(v), yfmt: v => fmt.n(v, 0) + ' d', ymin: 0 })
+        + '<div class="small mute">Solid: with the port cut. Dashed: the same component with no disruption.</div>'); }, { first: true }),
+  eta: x => card('Arrival forecast for the largest delayed shipment', kpis([{ label: 'Lane', value: `<span style="font-size:15px">${esc(x.lane)}</span>`, sub: x.carrier },
+      { label: 'Promised', value: fmt.date(x.promised_eta), sub: x.promised_transit_days + ' days in transit' }, { label: 'Predicted', value: `<span style="color:var(--warn)">${fmt.date(x.predicted_eta)}</span>`, sub: x.predicted_transit_days + ' days · ' + x.model_version },
+      { label: '80% interval', value: `<span style="font-size:15px">${fmt.date(x.interval_80[0])} to ${fmt.date(x.interval_80[1])}</span>` }, { label: 'Of which port queue', value: x.scenario_port_wait_days + ' d', sub: 'from the scenario' }])),
+  sup: s => card('Its supplier', kpis([{ label: 'Supplier', value: `<span style="font-size:15px">${esc(s.name)}</span>`, sub: 'tier ' + s.tier + ' · via ' + (s.ships_through || 'overland') },
+      { label: 'Delay risk', value: fmt.pct(s.risk_score, 1), sub: 'network average ' + fmt.pct(s.network_average, 1) }, { label: 'Late deliveries', value: fmt.pct(s.drivers.late_rate, 1), sub: fmt.n(s.drivers.deliveries) + ' deliveries in 2 years' },
+      { label: 'Components supplied', value: s.dependency.components_supplied, sub: s.dependency.single_sourced_components.length + ' with no second source' },
+      { label: 'Products depending', value: s.dependency.finished_products_depending, sub: M(s.dependency.weekly_revenue_depending) + ' revenue a week' }])),
+  mc: j => { const m = j.result; return card(`${fmt.n(m.runs)} futures · job ${j.status}`, kpis([{ label: 'Lost revenue, median', value: M(m.lost_revenue.p50) }, { label: '1 in 10 better than', value: M(m.lost_revenue.p10) },
+      { label: '1 in 10 worse than', value: `<span style="color:var(--bad)">${M(m.lost_revenue.p90)}</span>` }, { label: 'Chance it costs over $1M', value: fmt.pct(m.probability_disruption_costs_over_1m) },
+      { label: 'Same futures, no port cut', value: M(m.lost_revenue_without_disruption.p90), sub: '90th percentile' }]) + hist(m.histogram)
+      + `<div class="small mute" style="margin-top:6px">Sampled: capacity lost ${fmt.pct(m.sampled.severity_p10_p90[0])} to ${fmt.pct(m.sampled.severity_p10_p90[1])}, duration ${m.sampled.duration_days_p10_p90[0]} to ${m.sampled.duration_days_p10_p90[1]} days (10th to 90th percentile), transit noise ±${m.sampled.transit_noise_sd_days} days per shipment.</div>`); },
+  plan: j => { const p = j.result, o = p.comparison[2]; return card(`Optimized plan · ${esc(p.solver.name)} · ${esc(p.solver.status)} in ${fmt.n(p.solver.wall_ms / 1000, 1)} s`, kpis([
+      { label: 'Decision variables', value: fmt.n(p.solver.variables), sub: fmt.n(p.solver.constraints) + ' constraints' }, { label: 'Shipments to fly', value: o.shipments_flown, sub: M(o.freight_cost) + ' airfreight' },
+      { label: 'Second-source buys', value: o.alternate_buys }, { label: 'Warehouse transfers', value: o.warehouse_transfers, sub: M(o.other_cost) + ' for both' }])
+      + `<div class="grid2"><div><h3 class="mute small" style="text-transform:uppercase;letter-spacing:.06em">Fly these (largest first)</h3>${table([{ k: 'shipment_id', label: 'Shipment', f: v => `<span class="mono">${esc(v.slice(0, 8))}</span>` },
+          { k: 'delay_avoided_days', label: 'Delay avoided', num: 1, f: v => v + ' d' }, { k: 'value', label: 'Value', num: 1, f: M }, { k: 'cost', label: 'Air cost', num: 1, f: M }], p.actions.fly.slice(0, 6))}</div>
+        <div><h3 class="mute small" style="text-transform:uppercase;letter-spacing:.06em">Buy or transfer</h3>${table([{ k: 'sku', label: 'Component' }, { k: 'plant', label: 'Plant' }, { k: 'supplier', label: 'From' },
+          { k: 'qty', label: 'Units', num: 1, f: v => fmt.n(v) }, { k: 'first_day', label: 'From day', num: 1 }], p.actions.source_and_transfer.slice(0, 6))}</div></div>`
+      + `<div class="small mute" style="margin-top:8px">Assumptions: air takes ${p.assumptions.air_days} days and costs ${esc(p.assumptions.air_cost)}; at most ${fmt.pct(p.assumptions.air_value_cap_share)} of the delayed value can fly; a second source costs ${fmt.pct(p.assumptions.alternate_premium)} more.</div>`); },
+  _step6: Object.assign(r => { const c = r.plan.result.comparison, max = Math.max(...c.map(x => x.net_cost));
+    return card('Baseline against recovery plans (expected case, judged by the daily simulator)', table([{ k: 'plan', label: 'Plan', f: v => `<b>${planName[v]}</b>` }, { k: 'lost_revenue', label: 'Lost revenue', num: 1, f: M },
+        { k: 'freight_cost', label: 'Freight cost', num: 1, f: M }, { k: 'service_level', label: 'Service level', num: 1, f: v => fmt.pct(v, 2) }, { k: 'net_cost', label: 'Lost margin + plan cost', num: 1, f: v => `<b>${M(v)}</b>` },
+        { k: 'monte_carlo_lost_revenue', label: 'Lost revenue, 1-in-10 bad future', num: 1, f: v => M(v.p90) }], c)
+      + '<div style="margin-top:12px">' + barChart(c.map((x, i) => ({ label: planName[x.plan], value: x.net_cost, color: ['#6b6b78', '#e0a63c', '#3fb97a'][i] })), { fmt: M, max }) + '</div>'
+      + `<div class="small mute" style="margin-top:8px">The optimized plan is tuned to the expected case. In the worst tenth of futures it still loses ${M(c[2].monte_carlo_lost_revenue.p90)} of revenue, more than flying everything (${M(c[1].monte_carlo_lost_revenue.p90)}): cheap plans carry less insurance.</div>`); }, { first: true }),
+  audit: a => card(`Audit log · hash chain ${a.chain_valid ? 'verifies' : 'BROKEN'}`, table([{ k: 'at', label: 'When', f: fmt.time }, { k: 'action', label: 'Action', f: v => `<span class="mono">${esc(v)}</span>` },
+    { k: 'detail', label: 'Detail', f: d => `<span class="small">${esc(Object.entries(d).filter(([, v]) => typeof v !== 'object').map(([k, v]) => `${k}: ${v}`).join(' · ').slice(0, 130))}</span>` }], a.events.slice().reverse())),
+  _after: (i, r) => {
+    if (i === 0) { map = L.map('map', { scrollWheelZoom: false, worldCopyJump: true }).setView([28, 10], 2);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 6, attribution: '© OpenStreetMap' }).addTo(map);
+      layers.lanes = L.layerGroup(r.map.lanes.slice(0, 60).map(l => L.polyline([l.from, l.to], { color: '#7aa2ff', weight: 1, opacity: .25 }))).addTo(map);
+      L.layerGroup(r.map.in_transit_sample.map(s => L.circleMarker([s.from[0] + (s.to[0] - s.from[0]) * s.progress, s.from[1] + (s.to[1] - s.from[1]) * s.progress], { radius: 2, color: '#e0a63c', weight: 0, fillOpacity: .8 }))).addTo(map);
+      const color = { port: '#7aa2ff', plant: '#3fb97a', warehouse: '#6b6b78' };
+      layers.fac = {}; r.map.facilities.forEach(f => { layers.fac[f.id] = L.circleMarker([f.lat, f.lon], { radius: f.facility_type === 'warehouse' ? 3 : 6, color: color[f.facility_type], weight: 1, fillOpacity: .9 }).bindTooltip(f.name + ' (' + f.facility_type + ')').addTo(map); }); }
+    if (i === 1 && map) { const id = r.scn.assumptions.facility_id; layers.fac[id].setStyle({ color: '#ef6a6a', radius: 11 }).bringToFront();
+      L.layerGroup(r.map.lanes.filter(l => l.origin_id === id).map(l => L.polyline([l.from, l.to], { color: '#ef6a6a', weight: 1.5, opacity: .7 }))).addTo(map); }
+    if (i === 6) roi(r);
+  },
+};
+function roi(r) {
+  const c = r.plan.result.comparison, box = document.querySelector('#roibox');
+  box.innerHTML = `<div class="grid2"><div>
+    <label>Disruptions of this size per year (assumption) <input type="number" id="r_n" value="2" step="0.5"></label>
+    <label>Cost per event if nothing is done (from the simulator) <input type="number" id="r_a" value="${Math.round(c[0].net_cost)}"></label>
+    <label>Cost per event with the usual reaction, flying freight <input type="number" id="r_b" value="${Math.round(c[1].net_cost)}"></label>
+    <label>Cost per event with the optimized plan <input type="number" id="r_c" value="${Math.round(c[2].net_cost)}"></label></div><div id="r_out"></div></div>`;
+  const calc = () => { const g = id => +document.querySelector(id).value;
+    document.querySelector('#r_out').innerHTML = kpis([{ label: 'Saved per year vs doing nothing', value: M(g('#r_n') * (g('#r_a') - g('#r_c'))) }, { label: 'Saved per year vs flying freight', value: M(g('#r_n') * (g('#r_b') - g('#r_c'))) }]); };
+  box.oninput = calc; calc();
+}
+const demo = new Demo(R); demo.init();
+</script>
+</body>
+</html>
